@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Kursticker">
+  <meta name="theme-color" content="#000000">
+  <title>Kursticker</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      height: 100%;
+      background: #000;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+    #app {
+      display: flex;
+      flex-direction: column;
+      height: 100dvh;
+      height: 100vh;
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+    .ticker {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      border-bottom: 1px solid #1a1a1a;
+      padding: 14px 18px 0;
+      min-height: 0;
+    }
+    .ticker:last-child { border-bottom: none; }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-shrink: 0;
+    }
+    .name {
+      color: #888;
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: 0.3px;
+      text-transform: uppercase;
+    }
+    .change {
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: -0.2px;
+    }
+    .change.up { color: #00e676; }
+    .change.down { color: #ff1744; }
+    .change.neutral { color: #aaa; }
+    .price {
+      font-size: clamp(42px, 11vh, 78px);
+      font-weight: 700;
+      letter-spacing: -1.5px;
+      margin: 6px 0 4px;
+      line-height: 1;
+      flex-shrink: 0;
+      font-variant-numeric: tabular-nums;
+    }
+    .chart {
+      flex: 1;
+      min-height: 0;
+      position: relative;
+      margin: 0 -18px;
+    }
+    svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+      overflow: visible;
+    }
+    .loading {
+      color: #666;
+      font-size: 14px;
+      text-align: center;
+      padding-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="ticker" data-symbol="BTC-USD" data-decimals="0" data-name="Bitcoin">
+      <div class="header">
+        <span class="name">Bitcoin</span>
+        <span class="change neutral">—</span>
+      </div>
+      <div class="price">—</div>
+      <div class="chart"><svg viewBox="0 0 100 100" preserveAspectRatio="none"></svg></div>
+    </div>
+    <div class="ticker" data-symbol="MSTR" data-decimals="2" data-name="MSTR">
+      <div class="header">
+        <span class="name">MSTR</span>
+        <span class="change neutral">—</span>
+      </div>
+      <div class="price">—</div>
+      <div class="chart"><svg viewBox="0 0 100 100" preserveAspectRatio="none"></svg></div>
+    </div>
+    <div class="ticker" data-symbol="STRC" data-decimals="2" data-name="STRC">
+      <div class="header">
+        <span class="name">STRC</span>
+        <span class="change neutral">—</span>
+      </div>
+      <div class="price">—</div>
+      <div class="chart"><svg viewBox="0 0 100 100" preserveAspectRatio="none"></svg></div>
+    </div>
+  </div>
+
+  <script>
+    const PROXY = 'https://proxy.cors.dev/';
+    const UPDATE_INTERVAL = 12000; // 12 Sekunden
+
+    function formatPrice(price, decimals) {
+      if (price == null || isNaN(price)) return '—';
+      if (decimals === 0) {
+        return Math.round(price).toLocaleString('de-DE');
+      }
+      return price.toLocaleString('de-DE', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      });
+    }
+
+    function formatChange(pct) {
+      if (pct == null || isNaN(pct)) return '—';
+      const sign = pct >= 0 ? '+' : '';
+      return sign + pct.toLocaleString('de-DE', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      }) + '%';
+    }
+
+    async function fetchChart(symbol) {
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1m&range=1d&includePrePost=false`;
+      const proxied = PROXY + url;
+      const res = await fetch(proxied, {
+        headers: { 'Accept': 'application/json' }
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      const result = json.chart?.result?.[0];
+      if (!result) throw new Error('No chart data');
+      const meta = result.meta || {};
+      const price = meta.regularMarketPrice ?? meta.previousClose;
+      const prev = meta.chartPreviousClose ?? meta.previousClose ?? price;
+      const changePct = prev && price != null ? ((price - prev) / prev) * 100 : 0;
+
+      const timestamps = result.timestamp || [];
+      const closes = result.indicators?.quote?.[0]?.close || [];
+      const points = [];
+      for (let i = 0; i < closes.length; i++) {
+        const c = closes[i];
+        if (c != null && !isNaN(c)) points.push(c);
+      }
+      // Ensure last point is current price if available
+      if (price != null && (points.length === 0 || points[points.length - 1] !== price)) {
+        points.push(price);
+      }
+      if (points.length < 2) {
+        // Fallback flat line
+        points.length = 0;
+        points.push(prev, price ?? prev);
+      }
+
+      return { price, prev, changePct, points };
+    }
+
+    function drawChart(svg, points, prev, isPositive) {
+      if (!points || points.length < 2) {
+        svg.innerHTML = '';
+        return;
+      }
+      const w = 100; // viewBox
+      const h = 100;
+      const all = [...points, prev];
+      let min = Math.min(...all);
+      let max = Math.max(...all);
+      if (min === max) {
+        min -= 1;
+        max += 1;
+      }
+      const range = max - min;
+      const pad = 6; // percent padding top/bottom
+
+      const yOf = (v) => {
+        const norm = (v - min) / range;
+        return h - pad - norm * (h - 2 * pad);
+      };
+
+      // Build path
+      let d = '';
+      const step = w / (points.length - 1);
+      points.forEach((p, i) => {
+        const x = i * step;
+        const y = yOf(p);
+        d += (i === 0 ? 'M' : 'L') + x.toFixed(2) + ',' + y.toFixed(2) + ' ';
+      });
+
+      const prevY = yOf(prev);
+      const color = isPositive ? '#00e676' : '#ff1744';
+
+      svg.innerHTML = `
+        <line x1="0" y1="${prevY.toFixed(2)}" x2="${w}" y2="${prevY.toFixed(2)}"
+              stroke="#444" stroke-width="0.6" stroke-dasharray="1.5 1.2" vector-effect="non-scaling-stroke" />
+        <path d="${d.trim()}" fill="none" stroke="${color}" stroke-width="1.4"
+              stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
+      `;
+    }
+
+    async function updateTicker(el) {
+      const symbol = el.dataset.symbol;
+      const decimals = parseInt(el.dataset.decimals, 10);
+      const changeEl = el.querySelector('.change');
+      const priceEl = el.querySelector('.price');
+      const svg = el.querySelector('svg');
+
+      try {
+        const data = await fetchChart(symbol);
+        const isUp = data.changePct >= 0;
+        changeEl.textContent = formatChange(data.changePct);
+        changeEl.className = 'change ' + (isUp ? 'up' : 'down');
+        priceEl.textContent = formatPrice(data.price, decimals);
+        drawChart(svg, data.points, data.prev, isUp);
+      } catch (err) {
+        console.warn(symbol, err);
+        if (priceEl.textContent === '—') {
+          priceEl.textContent = '…';
+          changeEl.textContent = 'Fehler';
+          changeEl.className = 'change neutral';
+        }
+        // Keep previous values if we had them
+      }
+    }
+
+    async function updateAll() {
+      const tickers = document.querySelectorAll('.ticker');
+      // Sequential to be nicer to the proxy
+      for (const t of tickers) {
+        await updateTicker(t);
+        await new Promise(r => setTimeout(r, 300));
+      }
+    }
+
+    // Initial load
+    updateAll();
+    // Periodic
+    setInterval(updateAll, UPDATE_INTERVAL);
+
+    // Refresh on visibility change (when coming back from background on iPhone)
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') updateAll();
+    });
+  </script>
+</body>
+</html>
